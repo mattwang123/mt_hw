@@ -35,8 +35,8 @@ for f in french_word:
 for iteration in range(opts.iterations):
     sys.stderr.write(f"Starting EM iteration {iteration + 1}...\n")
     
-    count_fe = defaultdict(int)
-    total_e = defaultdict(int)
+    count_fe = defaultdict(float)
+    total_e = defaultdict(float)
     
     #calculate expected counts for each sentence pair
     for (f_sentence, e_sentence) in bitext:
