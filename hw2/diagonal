@@ -9,7 +9,7 @@ optparser = optparse.OptionParser()
 optparser.add_option("-d", "--data", dest="train", default="data/hansards", help="Data filename prefix (default=data)")
 optparser.add_option("-e", "--english", dest="english", default="e", help="Suffix of English filename (default=e)")
 optparser.add_option("-f", "--french", dest="french", default="f", help="Suffix of French filename (default=f)")
-optparser.add_option("-i", "--iterations", dest="iterations", default=10, type="int", help="Number of EM iterations to run")
+optparser.add_option("-i", "--iterations", dest="iterations", default=15, type="int", help="Number of EM iterations to run")
 optparser.add_option("-n", "--num_sentences", dest="num_sents", default=100000000000, type="int", help="Number of sentences to use for training and alignment")
 (opts, _) = optparser.parse_args()
 

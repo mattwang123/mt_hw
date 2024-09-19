@@ -1,0 +1,128 @@
+#!/usr/bin/env python
+import optparse
+import sys
+from collections import defaultdict
+import math
+
+# Parse command-line options
+optparser = optparse.OptionParser()
+optparser.add_option("-d", "--data", dest="train", default="data/hansards", help="Data filename prefix (default=data)")
+optparser.add_option("-e", "--english", dest="english", default="e", help="Suffix of English filename (default=e)")
+optparser.add_option("-f", "--french", dest="french", default="f", help="Suffix of French filename (default=f)")
+optparser.add_option("-i", "--iterations", dest="iterations", default=10, type="int", help="Number of EM iterations to run")
+optparser.add_option("-n", "--num_sentences", dest="num_sents", default=100000000000, type="int", help="Number of sentences to use for training and alignment")
+(opts, _) = optparser.parse_args()
+
+f_data = "%s.%s" % (opts.train, opts.french)
+e_data = "%s.%s" % (opts.train, opts.english)
+
+bitext = [[sentence.strip().split() for sentence in pair] for pair in zip(open(f_data), open(e_data))][:opts.num_sents]
+
+# Initialize translation and transition probabilities
+translation_prob = defaultdict(lambda: defaultdict(lambda: 1.0))
+transition_prob = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: 1.0)))
+
+french_word = set()
+english_word = set()
+
+# Store unique words from bitext
+for (f, e) in bitext:
+    french_word.update(f)
+    english_word.update(e)
+
+# Initialize translation probabilities uniformly
+for f in french_word:
+    for e in english_word:
+        translation_prob[f][e] = 1.0 / len(english_word)
+
+# Initialize transition probabilities uniformly for sequential alignment
+for (f_sentence, e_sentence) in bitext:
+    len_f = len(f_sentence)
+    len_e = len(e_sentence)
+    for i in range(len_f):
+        for j in range(len_e):
+            for k in range(len_e):  # k is the previous alignment position
+                transition_prob[i][j][k] = 1.0 / len_e
+
+# EM algorithm
+for iteration in range(opts.iterations):
+    sys.stderr.write(f"Starting EM iteration {iteration + 1}...\n")
+    
+    count_fe = defaultdict(float)
+    total_e = defaultdict(float)
+    count_t = defaultdict(float)
+    total_t = defaultdict(float)
+    
+    # E-step: calculate expected counts for each sentence pair
+    for (f_sentence, e_sentence) in bitext:
+        len_f = len(f_sentence)
+        len_e = len(e_sentence)
+
+        # Forward pass: calculate forward probabilities
+        alpha = defaultdict(lambda: defaultdict(float))
+        for i, f_i in enumerate(f_sentence):
+            for j, e_j in enumerate(e_sentence):
+                if i == 0:
+                    alpha[i][j] = translation_prob[f_i][e_j]
+                else:
+                    alpha[i][j] = sum(translation_prob[f_i][e_j] * transition_prob[i][j][k] * alpha[i - 1][k] for k in range(len_e))
+
+        # Backward pass: calculate backward probabilities
+        beta = defaultdict(lambda: defaultdict(float))
+        for i in reversed(range(len_f)):
+            for j, e_j in enumerate(e_sentence):
+                if i == len_f - 1:
+                    beta[i][j] = 1.0
+                else:
+                    beta[i][j] = sum(translation_prob[f_sentence[i + 1]][e_sentence[k]] * transition_prob[i + 1][k][j] * beta[i + 1][k] for k in range(len_e))
+
+        # Calculate expected counts using forward-backward probabilities
+        for i, f_i in enumerate(f_sentence):
+            normalization_factor = sum(alpha[i][j] * beta[i][j] for j in range(len_e))
+            for j, e_j in enumerate(e_sentence):
+                prob = (alpha[i][j] * beta[i][j]) / normalization_factor
+                count_fe[(f_i, e_j)] += prob
+                total_e[e_j] += prob
+                if i > 0:
+                    for k in range(len_e):
+                        prob_trans = (alpha[i - 1][k] * translation_prob[f_i][e_j] * transition_prob[i][j][k] * beta[i][j]) / normalization_factor
+                        count_t[(i, j, k)] += prob_trans
+                        total_t[(i - 1, k)] += prob_trans
+
+    # M-step: update translation probabilities based on counts
+    for (f_i, e_j), count in count_fe.items():
+        translation_prob[f_i][e_j] = count / total_e[e_j]
+
+    # M-step: update transition probabilities based on counts
+    smoothing_constant = 1e-10
+    for (i, j, k), count in count_t.items():
+        transition_prob[i][j][k] = count / (total_t[(i - 1, k)] + smoothing_constant)
+
+
+# Output alignments using Viterbi decoding (most probable alignment sequence)
+with open("alignment", "w") as alignment_file:
+    for (f_sentence, e_sentence) in bitext:
+        len_f = len(f_sentence)
+        len_e = len(e_sentence)
+        viterbi = defaultdict(lambda: defaultdict(float))
+        backpointer = defaultdict(lambda: defaultdict(int))
+        
+        # Viterbi decoding (finding the best alignment sequence)
+        for i, f_i in enumerate(f_sentence):
+            for j, e_j in enumerate(e_sentence):
+                if i == 0:
+                    viterbi[i][j] = translation_prob[f_i][e_j]
+                else:
+                    max_prob, best_prev_j = max((viterbi[i - 1][k] * transition_prob[i][j][k], k) for k in range(len_e))
+                    viterbi[i][j] = max_prob * translation_prob[f_i][e_j]
+                    backpointer[i][j] = best_prev_j
+
+        # Backtrack to find the best alignment path
+        best_path = []
+        last_j = max(range(len_e), key=lambda j: viterbi[len_f - 1][j])
+        for i in reversed(range(len_f)):
+            best_path.append((i, last_j))
+            last_j = backpointer[i][last_j]
+
+        # Output the best path (reversed to correct order)
+        alignment_file.write(" ".join(f"{i}-{j}" for i, j in reversed(best_path)) + "\n")
