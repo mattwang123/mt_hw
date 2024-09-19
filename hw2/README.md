@@ -7,18 +7,6 @@ There are three python programs here (`-h` for usage):
 
 - `./score-alignments` computes alignment error rate.
 
-The commands work in a pipeline. For instance:
+Besides, the given programs, you can run `IBM_model_one` or `./bidirec_bayesian` as the same way of running `./align`, with no additional parameters needed. It will automatically align the words and create the alignment file.
 
-   > ./align -t 0.9 -n 1000 | ./check | ./grade -n 5
-
-The `data` directory contains a fragment of the Canadian Hansards,
-aligned by Ulrich Germann:
-
-- `hansards.e` is the English side.
-
-- `hansards.f` is the French side.
-
-- `hansards.a` is the alignment of the first 37 sentences. The 
-  notation i-j means the word as position i of the French is 
-  aligned to the word at position j of the English. Notation 
-  i?j means they are probably aligned. Positions are 0-indexed.
+`mt_hw2_writing` is the writing part of homework2, which describes the motivation, model, and result of the code.
