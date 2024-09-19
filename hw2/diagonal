@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 import optparse
 import sys
+import math
 from collections import defaultdict
 
+# Parse command-line options
 optparser = optparse.OptionParser()
 optparser.add_option("-d", "--data", dest="train", default="data/hansards", help="Data filename prefix (default=data)")
 optparser.add_option("-e", "--english", dest="english", default="e", help="Suffix of English filename (default=e)")
@@ -10,56 +12,66 @@ optparser.add_option("-f", "--french", dest="french", default="f", help="Suffix 
 optparser.add_option("-i", "--iterations", dest="iterations", default=10, type="int", help="Number of EM iterations to run")
 optparser.add_option("-n", "--num_sentences", dest="num_sents", default=100000000000, type="int", help="Number of sentences to use for training and alignment")
 (opts, _) = optparser.parse_args()
+
 f_data = "%s.%s" % (opts.train, opts.french)
 e_data = "%s.%s" % (opts.train, opts.english)
 
 bitext = [[sentence.strip().split() for sentence in pair] for pair in zip(open(f_data), open(e_data))][:opts.num_sents]
 
-#set translation probability for every French to English word pair to 1.0
+# Set translation probability for every French to English word pair to 1.0
 translation_prob = defaultdict(lambda: defaultdict(lambda: 1.0))
 
 french_word = set()
 english_word = set()
 
-#store unique word from bitext
-for (f,e) in bitext:
-  french_word.update(f)
-  english_word.update(e)
+# Store unique words from bitext
+for (f, e) in bitext:
+    french_word.update(f)
+    english_word.update(e)
 
-#assume each English word is equally likely to translate to the French word
+# Assume each English word is equally likely to translate to the French word
 for f in french_word:
     for e in english_word:
         translation_prob[f][e] = 1.0 / len(english_word)
 
-#EM algorithm
+# Diagonal bias function
+def diagonal_bias(i, j, len_f, len_e, lambda_val=0.5):
+    diagonal_distance = abs(i - j) / max(len_f, len_e)
+    return math.exp(-lambda_val * diagonal_distance)
+
+# EM algorithm with diagonal bias
 for iteration in range(opts.iterations):
     sys.stderr.write(f"Starting EM iteration {iteration + 1}...\n")
     
     count_fe = defaultdict(float)
     total_e = defaultdict(float)
     
-    #calculate expected counts for each sentence pair
+    # Calculate expected counts for each sentence pair
     for (f_sentence, e_sentence) in bitext:
-        #normalization factor for each French word
-        for f_i in f_sentence:
-            normalization_factor = 0.0
-            for e_j in e_sentence:
-                normalization_factor += translation_prob[f_i][e_j]
+        len_f = len(f_sentence)
+        len_e = len(e_sentence)
 
-            #update counts for each alignment
-            for e_j in e_sentence:
-                prob = translation_prob[f_i][e_j] / normalization_factor
+        # Normalization factor for each French word with diagonal bias
+        for i, f_i in enumerate(f_sentence):
+            normalization_factor = 0.0
+            for j, e_j in enumerate(e_sentence):
+                bias = diagonal_bias(i, j, len_f, len_e)  # Apply diagonal bias
+                normalization_factor += translation_prob[f_i][e_j] * bias
+
+            # Update counts for each alignment, incorporating the diagonal bias
+            for j, e_j in enumerate(e_sentence):
+                bias = diagonal_bias(i, j, len_f, len_e)
+                prob = (translation_prob[f_i][e_j] * bias) / normalization_factor
                 count_fe[(f_i, e_j)] += prob
                 total_e[e_j] += prob
 
-    #update translation probabilities based on counts
+    # Update translation probabilities based on counts
     for (f_i, e_j), count in count_fe.items():
         translation_prob[f_i][e_j] = count / total_e[e_j]
 
+# Output the best alignment based on final probabilities (with diagonal bias)
 for (f_sentence, e_sentence) in bitext:
     for i, f_i in enumerate(f_sentence):
         best_j = max(range(len(e_sentence)), key=lambda j: translation_prob[f_i][e_sentence[j]])
         sys.stdout.write(f"{i}-{best_j} ")
     sys.stdout.write("\n")
-
-    
