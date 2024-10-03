@@ -9,74 +9,88 @@ optparser.add_option("-i", "--input", dest="input", default="data/input", help="
 optparser.add_option("-t", "--translation-model", dest="tm", default="data/tm", help="File containing translation model (default=data/tm)")
 optparser.add_option("-l", "--language-model", dest="lm", default="data/lm", help="File containing ARPA-format language model (default=data/lm)")
 optparser.add_option("-n", "--num_sentences", dest="num_sents", default=sys.maxsize, type="int", help="Number of sentences to decode (default=no limit)")
-optparser.add_option("-k", "--translations-per-phrase", dest="k", default=1, type="int", help="Limit on number of translations to consider per phrase (default=1)")
-optparser.add_option("-s", "--stack-size", dest="s", default=1, type="int", help="Maximum stack size (default=1)")
-optparser.add_option("-v", "--verbose", dest="verbose", action="store_true", default=False,  help="Verbose mode (default=off)")
+optparser.add_option("-k", "--translations-per-phrase", dest="k", default=5, type="int", help="Limit on number of translations to consider per phrase (default=5)")
+optparser.add_option("-s", "--stack-size", dest="s", default=1000, type="int", help="Maximum stack size (default=10)")
+optparser.add_option("-v", "--verbose", dest="verbose", action="store_true", default=False, help="Verbose mode (default=off)")
 opts = optparser.parse_args()[0]
 
 tm = models.TM(opts.tm, opts.k)
 lm = models.LM(opts.lm)
 french = [tuple(line.strip().split()) for line in open(opts.input).readlines()[:opts.num_sents]]
 
-# tm should translate unknown words as-is with probability 1
-for word in set(sum(french,())):
-  if (word,) not in tm:
-    tm[(word,)] = [models.phrase(word, 0.0)]
+# Translate unknown words as-is with probability 1
+for word in set(sum(french, ())):
+    if (word,) not in tm:
+        tm[(word,)] = [models.phrase(word, 0.0)]
 
-sys.stderr.write("Decoding %s...\n" % (opts.input,))
+sys.stderr.write(f"Decoding {opts.input}...\n")
+unaligned_count = 0  # Track unaligned sentences
+
 for f in french:
-  # The following code implements a monotone decoding
-  # algorithm (one that doesn't permute the target phrases).
-  # Hence all hypotheses in stacks[i] represent translations of 
-  # the first i words of the input sentence. You should generalize
-  # this so that they can represent translations of *any* i words.
+    hypothesis = namedtuple("hypothesis", "logprob, lm_state, predecessor, phrase")
+    initial_hypothesis = hypothesis(0.0, lm.begin(), None, None)
+    stacks = [defaultdict(lambda: None) for _ in range(len(f) + 1)]
+    stacks[0][lm.begin()] = initial_hypothesis
 
-  hypothesis = namedtuple("hypothesis", "logprob, lm_state, predecessor, phrase")
-  initial_hypothesis = hypothesis(0.0, lm.begin(), None, None)
+    # Histogram to keep track of phrase usage
+    histogram = defaultdict(int)
 
-  stacks = [{} for _ in f] + [{}]
-  stacks[0][lm.begin()] = initial_hypothesis
+    for i in range(len(f)):
+        for h in sorted(stacks[i].values(), key=lambda h: -h.logprob)[:opts.s]:  # prune
+            for j in range(i + 1, len(f) + 1):
+                if f[i:j] in tm:
+                    for phrase in tm[f[i:j]]:
+                        # Skip if this phrase has been used excessively
+                        if histogram[phrase.english] >= opts.k:
+                            continue
 
-  histogram = defaultdict(int)
+                        logprob = h.logprob + phrase.logprob
+                        lm_state = h.lm_state
+                        for word in phrase.english.split():
+                            (lm_state, word_logprob) = lm.score(lm_state, word)
+                            logprob += word_logprob
+                        logprob += lm.end(lm_state) if j == len(f) else 0.0
+                        new_hypothesis = hypothesis(logprob, lm_state, h, phrase)
 
-  for i, stack in enumerate(stacks[:-1]):
-    for h in sorted(stack.values(),key=lambda h: -h.logprob)[:opts.s]: # prune
-      for j in range(i+1,len(f)+1):
-        if f[i:j] in tm:
-          for phrase in tm[f[i:j]]:
-            logprob = h.logprob + phrase.logprob
-            lm_state = h.lm_state
+                        # Check for recombination and update stacks
+                        if lm_state not in stacks[j] or stacks[j][lm_state].logprob < logprob:
+                            stacks[j][lm_state] = new_hypothesis
 
-            for word in phrase.english.split():
-              (lm_state, word_logprob) = lm.score(lm_state, word)
-              logprob += word_logprob
-              
-            logprob += lm.end(lm_state) if j == len(f) else 0.0
-            new_hypothesis = hypothesis(logprob, lm_state, h, phrase)
+                        # Update histogram for the phrase
+                        histogram[phrase.english] += 1
 
+        # Prune histogram to remove oldest phrase usage
+        for h in sorted(stacks[i].values(), key=lambda h: -h.logprob)[:opts.s]:
+            if h.phrase:
+                histogram[h.phrase.english] -= 1
 
-            if lm_state not in histogram:
-                histogram[lm_state] = 0  # Initialize if not exists
-            histogram[lm_state] += 1  # Increment the count
+    # Ensure at least one hypothesis is generated for the last stack
+    if stacks[-1]:  # Check if there are any hypotheses
+        winner = max(stacks[-1].values(), key=lambda h: h.logprob)
+    else:
+        # If no valid hypotheses, generate a hypothesis that translates the entire sentence as-is
+        winner = hypothesis(0.0, lm.begin(), None, models.phrase(" ".join(f), 0.0))
+        unaligned_count += 1
 
-            if histogram[lm_state] <= opts.s:
-              if lm_state not in stacks[j] or stacks[j][lm_state].logprob < logprob: # second case is recombination
-                stacks[j][lm_state] = new_hypothesis
+    # Check for alignment, fallback for unaligned sentences
+    if winner.phrase is None:  # If no phrases were used, indicate unalignment
+        sys.stderr.write(f"ERROR: Sentence '{' '.join(f)}' could not be aligned!\n")
+        winner = hypothesis(float('-inf'), lm.begin(), None, models.phrase(" ".join(f), 0.0))
+        unaligned_count += 1
 
-  if not stacks[-1]:  # Check if the last stack is empty
-      print("No valid hypotheses found for the sentence.")
-      continue  # Skip to the next sentence or handle the error appropriately
-  
-  winner = max(stacks[-1].values(), key=lambda h: h.logprob)
+    def extract_english(h):
+        return "" if h.predecessor is None else "%s%s " % (extract_english(h.predecessor), h.phrase.english)
 
+    print(extract_english(winner).strip())
 
-  def extract_english(h): 
-    return "" if h.predecessor is None else "%s%s " % (extract_english(h.predecessor), h.phrase.english)
-  print(extract_english(winner))
+    if opts.verbose:
+        def extract_tm_logprob(h):
+            return 0.0 if h.predecessor is None else h.phrase.logprob + extract_tm_logprob(h.predecessor)
+        tm_logprob = extract_tm_logprob(winner)
+        sys.stderr.write(f"LM = {winner.logprob - tm_logprob}, TM = {tm_logprob}, Total = {winner.logprob}\n")
 
-  if opts.verbose:
-    def extract_tm_logprob(h):
-      return 0.0 if h.predecessor is None else h.phrase.logprob + extract_tm_logprob(h.predecessor)
-    tm_logprob = extract_tm_logprob(winner)
-    sys.stderr.write("LM = %f, TM = %f, Total = %f\n" % 
-      (winner.logprob - tm_logprob, tm_logprob, winner.logprob))
+# Report unaligned sentences
+if unaligned_count > 0:
+    sys.stderr.write(f"ERROR: There were {unaligned_count} unaligned sentences! Only sentences that align under the model can be graded!\n")
+else:
+    sys.stderr.write("All sentences aligned successfully!\n")
