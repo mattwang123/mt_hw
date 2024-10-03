@@ -1,0 +1,89 @@
+\documentclass{article}
+\usepackage{amsmath,amsfonts,amssymb}
+\usepackage{geometry} % Page margin setup
+\geometry{left=1.2in,right=1.2in,top=1.5in,bottom=1.2in, footskip=12pt}
+
+\title{Beam Search Decoder with Lagrangian Relaxation and Distortion Limit}
+\author{Zhekai Chen, Nancy Wu, Matt Wang}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Motivation}
+
+While beam search with reordering and histogram pruning effectively explores translation options, it can lead to the overuse of specific phrases and excessive reordering. We integrate Lagrangian relaxation and distortion limits into the beam search framework to enhance translation quality. Lagrangian relaxation penalizes the overuse of phrases, promoting diversity in translations, while distortion limits control reordering, ensuring alignment with the original sentence structure.
+
+\section{Hypothesis Probability}
+
+Each hypothesis \( h \) is scored based on a combined log-probability derived from both the translation and language models:
+
+\[
+\arg\max_e \left( \log p_{\text{TM}}(f \mid e) + \log p_{\text{LM}}(e) \right)
+\]
+
+Here:
+\begin{itemize}
+    \item \( p_{\text{TM}}(f \mid e) \) represents the probability that the English phrase \( e \) correctly translates the French phrase \( f \),
+    \item \( p_{\text{LM}}(e) \) is the probability of the English sentence \( e \) according to the language model.
+\end{itemize}
+
+
+\section{Incorporating Lagrangian Relaxation and Distortion Limit}
+\subsection{Lagrangian Relaxation for Phrase Usage Control}
+Lagrangian relaxation is used to penalize hypotheses that overuse particular phrases, thus encouraging more diverse phrase selections and preventing repeated use of the same translation. The hypothesis log-probability is adjusted as follows:
+
+\[
+\mathcal{L}(e, f, \lambda) = \text{logprob}_h - \lambda \cdot \max(\text{count}(e) - k, 0)
+\]
+
+Here, \( \lambda \) is the Lagrange multiplier controlling the strength of the penalty, \( \text{count}(e) \) represents the number of times the English phrase \( e \) has been used in the current hypothesis, and \( k \) is a threshold for acceptable reuse. If a phrase is used more than \( k \) times, the penalty increases.
+
+\subsection{Distortion Limit for Controlling Reordering}
+The distortion penalty is applied to limit the amount of reordering between the French and English phrases by discouraging significant deviations from the original order of the source sentence. The distortion cost is calculated as:
+
+\[
+D(e, f) = \sum_{i=1}^N \left| \text{pos}(f_i) - \text{pos}(e_i) \right|
+\]
+
+This measures the difference between the positions of corresponding phrases in the French and English sentences. A distortion weight \( w_d \) is applied to penalize large reordering, yielding the following adjusted log-probability:
+
+\[
+\text{logprob}_{\text{adjusted}} = \text{logprob}_h - w_d \cdot D(e, f)
+\]
+
+\section{Final Score and Selection of Hypotheses}
+With the adjustments for phrase reuse and distortion penalties, the total score for a hypothesis is given by:
+
+\[
+\text{logprob}' = \log p_{\text{TM}}(e \mid f_{i:j}) + \sum_{w \in e} \log p_{\text{LM}}(w \mid \text{lm\_state}) - \lambda \cdot \max(\text{count}(e) - k, 0) - w_d \cdot D(e, f)
+\]
+
+\begin{itemize}
+    \item \( p_{\text{TM}}(e \mid f_{i:j}) \) represents the probability that the English phrase \( e \) correctly translates the subsequence \( f_{i:j} \) of the French phrase,
+    \item \( \sum_{w \in e} \log p_{\text{LM}}(w \mid \text{lm\_state}) \) is the cumulative log-probability of the words in the English sentence \( e \) given the language model state,
+    \item \( \lambda \) is the Lagrange multiplier that controls the penalty for overusing phrases,
+    \item \( \text{count}(e) \) tracks the usage frequency of the English phrase \( e \),
+    \item \( k \) sets the threshold for acceptable reuse,
+    \item \( w_d \) is the weight applied to the distortion penalty,
+    \item \( D(e, f) \) measures the distortion cost associated with reordering the phrases from the French to the English sentence.
+\end{itemize}
+
+When a hypothesis covers all positions in the French sentence, the decoder further adjusts the score by adding the probability of ending the sentence correctly. The best hypothesis is selected as the translation output based on this adjusted total log-probability, ensuring that the translation is both fluent and well-aligned with the original sentence.
+
+\section{Results}
+In our exploration of machine translation decoding strategies, we experimented with several algorithms, including beam search, A\(^*\) search, and Integer Linear Programming (ILP), all tested within a framework incorporating translation and language models. Each algorithm was evaluated based on its total corpus log-probability performance (LM + TM) and translation quality in a controlled setting using a standardized bilingual dataset. \\ 
+
+
+The models were tested on a dataset containing French sentences, with the following settings:
+\begin{itemize}
+    \item \textbf{Beam width}: \( \beta = 1000 \)
+    \item \textbf{Translations-per-phrase} \( k = 5 \)
+    \item \textbf{Distortion weight}: \( w_d = 0.3 \)
+    \item \textbf{Lagrangian multiplier}: \( \lambda = 0.5 \)
+\end{itemize}
+
+While A\(^*\) search and ILP provide theoretically optimal solutions by exhaustively searching the solution space, our results showed that these methods were not as efficient or effective in practice compared to the enhanced beam search. Specifically, the basic beam search, when combined with Lagrangian relaxation to control phrase overuse and distortion penalties to limit excessive reordering, demonstrated significant improvements. The distortion penalty reduced reordering unalignments, while Lagrangian relaxation encouraged more diverse phrase selections, ultimately improving the total corpus log-probability from \(-1439.874\) (without reordering and pruning) to \(-1368.282\) (with reordering and histogram pruning) to \(-1317.564\) (with Lagrangian Relaxation and Distortion limit). This adjusted beam search outperformed both A\(^*\) search and ILP, delivering superior translation fluency and alignment while maintaining computational efficiency.
+
+\end{document}
