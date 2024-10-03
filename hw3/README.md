@@ -2,7 +2,6 @@ There are three python programs here:
 
 - `decode` translates input sentences from French to English.
 - `decode-ext` translates input sentences from French to English with advanced decoder algorithm.
-- `compute-model-score` computes the model score of a translated sentence.
 
 You can run `decode` or `decode-ext` with no additional parameters needed. It will automatically translate the input sentences.
 
